@@ -21,6 +21,7 @@ import java.util.Set;
 public class App extends Application {
     static final String TAG = "MarkBook";
     static final String HOME = "https://m.facebook.com/";
+    static final String MESSAGES = "https://www.facebook.com/messages/";
 
     /** {addon id, addons.mozilla.org slug}: installed (AMO-signed) on first start, updated later. */
     private static final String[][] EXTENSIONS = {
@@ -29,8 +30,10 @@ public class App extends Application {
 
     private static GeckoRuntime runtime;
     private static GeckoSession session;
+    private static GeckoSession messages;
+    private static java.util.function.Consumer<JSONObject> pageListener;
     private static WebExtension helper;
-    private static WebExtension.Port helperPort;
+    private static final java.util.Map<GeckoSession, WebExtension.Port> ports = new java.util.HashMap<>();
 
     static GeckoRuntime runtime(Context ctx) {
         if (runtime == null) {
@@ -57,18 +60,54 @@ public class App extends Application {
                     .build();
             session = new GeckoSession(settings);
             session.open(runtime(ctx));
-            attachHelper();
+            attachHelper(session);
             session.loadUri(HOME);
         }
         return session;
     }
 
+    static boolean hasMessages() {
+        return messages != null && messages.isOpen();
+    }
+
+    /**
+     * The messages tab. Facebook's mobile site only offers "Get the Messenger app", so this tab
+     * asks for the desktop site (which has the inbox) but keeps the phone-sized viewport.
+     */
+    static GeckoSession messages(Context ctx) {
+        if (!hasMessages()) {
+            GeckoSessionSettings settings = new GeckoSessionSettings.Builder()
+                    .usePrivateMode(false)
+                    .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP)
+                    .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
+                    .build();
+            messages = new GeckoSession(settings);
+            messages.open(runtime(ctx));
+            attachHelper(messages);
+            messages.loadUri(MESSAGES);
+        }
+        return messages;
+    }
+
+    /** m.facebook.com/messages/... -> www.facebook.com/messages/... */
+    static String toDesktop(String url) {
+        android.net.Uri u = android.net.Uri.parse(url);
+        return u.buildUpon().scheme("https").authority("www.facebook.com").build().toString();
+    }
+
+    static void setPageListener(java.util.function.Consumer<JSONObject> l) {
+        pageListener = l;
+    }
+
     static void resetSession() {
-        if (session != null) {
-            try { session.close(); } catch (Exception ignored) { }
+        for (GeckoSession s : new GeckoSession[]{session, messages}) {
+            if (s != null) {
+                try { s.close(); } catch (Exception ignored) { }
+            }
         }
         session = null;
-        helperPort = null;
+        messages = null;
+        ports.clear();
     }
 
     private static void setupExtensions(GeckoRuntime rt) {
@@ -97,7 +136,8 @@ public class App extends Application {
         controller.ensureBuiltIn("resource://android/assets/extensions/helper/", "helper@markbook.marko")
                 .accept(ext -> {
                     helper = ext;
-                    attachHelper();
+                    attachHelper(session);
+                    attachHelper(messages);
                 }, t -> Log.e(TAG, "helper extension failed", t));
 
         controller.list().accept(installed -> {
@@ -120,36 +160,41 @@ public class App extends Application {
         }, t -> Log.e(TAG, "listing extensions failed", t));
     }
 
-    private static void attachHelper() {
-        if (helper == null || !hasSession()) return;
-        session.getWebExtensionController().setMessageDelegate(helper, new WebExtension.MessageDelegate() {
+    private static void attachHelper(GeckoSession target) {
+        if (helper == null || target == null || !target.isOpen()) return;
+        target.getWebExtensionController().setMessageDelegate(helper, new WebExtension.MessageDelegate() {
             @Override
             public void onConnect(WebExtension.Port port) {
-                helperPort = port;
+                ports.put(target, port);
                 port.setDelegate(new WebExtension.PortDelegate() {
                     @Override
                     public void onPortMessage(Object message, WebExtension.Port p) {
-                        if (message instanceof JSONObject) {
-                            JSONObject msg = (JSONObject) message;
-                            Log.i(TAG, "page: " + msg.optString("text", msg.toString()));
+                        if (!(message instanceof JSONObject)) return;
+                        JSONObject msg = (JSONObject) message;
+                        if ("log".equals(msg.optString("type"))) {
+                            Log.i(TAG, "page: " + msg.optString("text"));
+                        } else if (pageListener != null) {
+                            pageListener.accept(msg);
                         }
                     }
 
                     @Override
                     public void onDisconnect(WebExtension.Port p) {
-                        if (helperPort == p) helperPort = null;
+                        if (ports.get(target) == p) ports.remove(target);
                     }
                 });
             }
         }, "markbook");
     }
 
-    /** Debug aid: asks the helper to log a description of the page. */
-    static void dumpPage() {
-        WebExtension.Port port = helperPort;
-        if (port == null) return;
+    /** Sends a JSON command to the page helper in the given tab. */
+    static void send(GeckoSession target, String json) {
+        WebExtension.Port port = ports.get(target);
+        if (port == null) { Log.i(TAG, "debug: no helper port"); return; }
         try {
-            port.postMessage(new JSONObject().put("type", "dump"));
-        } catch (Exception ignored) { }
+            port.postMessage(new JSONObject(json));
+        } catch (Exception e) {
+            Log.i(TAG, "debug failed: " + e);
+        }
     }
 }

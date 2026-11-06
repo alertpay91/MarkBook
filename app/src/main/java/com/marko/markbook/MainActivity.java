@@ -45,10 +45,15 @@ public class MainActivity extends Activity {
 
     private android.widget.FrameLayout root;
     private GeckoView geckoView;
+    /** The tab on screen: the mobile site, or the messages tab (desktop site, see App). */
     private GeckoSession session;
-    private boolean canGoBack;
+    private GeckoSession mainSession;
+    private GeckoSession messagesSession;
+    private final java.util.Map<GeckoSession, Boolean> canGoBack = new java.util.HashMap<>();
+    private final java.util.Map<GeckoSession, String> urls = new java.util.HashMap<>();
     private boolean fullScreen;
-    private String currentUrl = App.HOME;
+    /** Android sometimes runs two copies of this screen for a moment; only the newest one owns the tabs. */
+    private static MainActivity owner;
 
     private PromptDelegate.FilePrompt pendingFilePrompt;
     private GeckoResult<PromptDelegate.PromptResponse> pendingFileResult;
@@ -76,12 +81,83 @@ public class MainActivity extends Activity {
     }
 
     private void attachSession() {
-        session = App.session(this);
-        session.setNavigationDelegate(new NavDelegate());
-        session.setContentDelegate(new ContentDelegate());
-        session.setPromptDelegate(new Prompts());
-        session.setPermissionDelegate(new Permissions());
-        geckoView.setSession(session);
+        mainSession = App.session(this);
+        setDelegates(mainSession);
+        if (App.hasMessages()) {
+            messagesSession = App.messages(this);
+            setDelegates(messagesSession);
+        }
+        session = null;
+        show(mainSession);
+        App.setPageListener(this::onPageMessage);
+        // The inbox (desktop site) takes a long time to start, so it loads quietly a few seconds
+        // after the feed, while the app is open; nothing is loaded in the background otherwise.
+        geckoView.postDelayed(this::preloadMessages, 4000);
+    }
+
+    private void preloadMessages() {
+        if (isFinishing() || owner != this || (messagesSession != null && messagesSession.isOpen())) return;
+        messagesSession = App.messages(this);
+        setDelegates(messagesSession);
+        // Hidden tabs are throttled hard, so let it load at full speed for a while, then let it
+        // sleep until it is opened.
+        final GeckoSession inbox = messagesSession;
+        inbox.setActive(true);
+        geckoView.postDelayed(() -> {
+            if (session != inbox && inbox.isOpen()) inbox.setActive(false);
+        }, 60000);
+    }
+
+    private void setDelegates(GeckoSession s) {
+        s.setNavigationDelegate(new NavDelegate());
+        s.setContentDelegate(new ContentDelegate());
+        s.setPromptDelegate(new Prompts());
+        s.setPermissionDelegate(new Permissions());
+    }
+
+    private void show(GeckoSession s) {
+        if (session == s && owner == this) return;
+        if (session != null && session != s) {
+            session.setFocused(false);
+            session.setActive(false);
+        }
+        session = s;
+        owner = this;
+        if (geckoView.getSession() != s) {
+            if (geckoView.getSession() != null) geckoView.releaseSession();
+            geckoView.setSession(s);
+        }
+        s.setActive(true);
+        s.setFocused(true);
+    }
+
+    /** Facebook's mobile site has no inbox, so messages use the desktop site in their own tab. */
+    private void openMessages(String url) {
+        if (messagesSession == null || !messagesSession.isOpen()) {
+            messagesSession = App.messages(this);
+            setDelegates(messagesSession);
+        } else if (url != null) {
+            messagesSession.loadUri(url);
+        }
+        show(messagesSession);
+    }
+
+    private int backRequest;
+
+    private void onPageMessage(org.json.JSONObject msg) {
+        String type = msg.optString("type");
+        if ("openMessages".equals(type)) {
+            openMessages(null);
+        } else if ("backResult".equals(type)) {
+            int id = backRequest;
+            backRequest++; // answered: cancel the timeout
+            if (!msg.optBoolean("handled") && id == backRequest - 1) show(mainSession);
+        }
+    }
+
+    private static boolean isMessagesUrl(Uri u) {
+        String path = u.getPath() == null ? "" : u.getPath();
+        return path.startsWith("/messages") || path.startsWith("/t/") || path.startsWith("/messenger");
     }
 
     @Override
@@ -103,7 +179,13 @@ public class MainActivity extends Activity {
                 if (m.find()) url = m.group();
             }
         }
-        if (url != null && isAllowed(Uri.parse(url))) session.loadUri(url);
+        if (url == null || !isAllowed(Uri.parse(url))) return;
+        if (isMessagesUrl(Uri.parse(url))) {
+            openMessages(App.toDesktop(url));
+        } else {
+            show(mainSession);
+            mainSession.loadUri(url);
+        }
     }
 
     // ---- Back button: fullscreen -> page history -> news feed -> leave the app ----
@@ -111,9 +193,17 @@ public class MainActivity extends Activity {
     private void handleBack() {
         if (fullScreen) {
             session.exitFullScreen();
-        } else if (canGoBack) {
+        } else if (session == messagesSession) {
+            // Inbox: chat -> chat list -> back to the feed (history would end on an empty page).
+            // The page knows best whether a chat is open (Facebook doesn't report that change).
+            final int id = ++backRequest;
+            App.send(session, "{\"type\":\"chatBack\"}");
+            geckoView.postDelayed(() -> {
+                if (backRequest == id) { backRequest++; show(mainSession); }
+            }, 400);
+        } else if (Boolean.TRUE.equals(canGoBack.get(session))) {
             session.goBack();
-        } else if (!isHome(currentUrl)) {
+        } else if (!isHome(urls.get(session))) {
             session.loadUri(App.HOME);
         } else {
             moveTaskToBack(true);
@@ -201,13 +291,13 @@ public class MainActivity extends Activity {
     private class NavDelegate implements GeckoSession.NavigationDelegate {
         @Override
         public void onCanGoBack(GeckoSession s, boolean value) {
-            canGoBack = value;
+            canGoBack.put(s, value);
         }
 
         @Override
         public void onLocationChange(GeckoSession s, String url, List<ContentPermission> perms,
                                      Boolean hasUserGesture) {
-            if (url != null) currentUrl = url;
+            if (url != null) urls.put(s, url);
         }
 
         @Override
@@ -218,6 +308,12 @@ public class MainActivity extends Activity {
                 case "http":
                 case "https":
                     if (isAllowed(uri)) {
+                        if (s == mainSession && isMessagesUrl(uri)) {
+                            // Only a real link to a chat opens it; the inbox itself is kept as is.
+                            boolean chat = uri.getPath() != null && uri.getPath().contains("/t/");
+                            openMessages(chat ? App.toDesktop(req.uri) : null);
+                            return GeckoResult.deny();
+                        }
                         if (req.target == TARGET_WINDOW_NEW) {
                             s.loadUri(req.uri); // no tabs: open "new window" links in place
                             return GeckoResult.deny();
@@ -264,8 +360,9 @@ public class MainActivity extends Activity {
 
     private void recoverSession() {
         geckoView.releaseSession();
+        session = null;
         App.resetSession();
-        canGoBack = false;
+        canGoBack.clear();
         if (fullScreen) setFullScreen(false);
         attachSession();
     }
@@ -502,18 +599,30 @@ public class MainActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
-        if (App.hasSession()) session.setActive(false);
+        if (owner == this) {
+            for (GeckoSession s : new GeckoSession[]{mainSession, messagesSession}) {
+                if (s != null && s.isOpen()) s.setActive(false);
+            }
+        }
     }
 
     @Override
     protected void onStart() {
         super.onStart();
-        if (App.hasSession()) session.setActive(true);
+        if (owner != this && session != null) {
+            // Another copy took the tab over; take it back now that this one is on screen.
+            GeckoSession s = session;
+            session = null;
+            show(s);
+        } else if (session != null && session.isOpen()) {
+            session.setActive(true);
+        }
     }
 
     @Override
     protected void onDestroy() {
-        if (geckoView != null) geckoView.releaseSession();
+        if (geckoView != null && owner == this) geckoView.releaseSession();
+        if (owner == this) owner = null;
         super.onDestroy();
     }
 }
