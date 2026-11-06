@@ -152,6 +152,69 @@
     }).observe(document.documentElement, { childList: true, subtree: true });
   }
 
+  // ---- Pull down at the top of the feed to refresh (the website has no pull-to-refresh) ----
+  function setupPullToRefresh(isFeed) {
+    const PULL = 110, MAX = 170;
+    let startY = -1, startX = 0, pulling = false, dist = 0;
+    const box = document.createElement("div");
+    box.style.cssText = "position:fixed;left:50%;top:0;z-index:2147483647;width:44px;height:44px;margin-left:-22px;"
+      + "border-radius:22px;background:#2b2f36;box-shadow:0 2px 8px rgba(0,0,0,.45);display:none;"
+      + "align-items:center;justify-content:center;color:#fff;font:600 22px sans-serif;pointer-events:none;"
+      + "transition:opacity .15s;";
+    box.textContent = "↻";
+    const attach = () => { if (!box.isConnected) (document.body || document.documentElement).appendChild(box); };
+    const show = (d) => {
+      attach();
+      box.style.display = "flex";
+      const p = Math.min(d / PULL, 1);
+      box.style.transform = "translateY(" + Math.round(Math.min(d, MAX) * 0.6) + "px) rotate(" + Math.round(p * 300) + "deg)";
+      box.style.opacity = String(0.35 + p * 0.65);
+      box.style.background = p >= 1 ? "#4f8cff" : "#2b2f36";
+    };
+    const hideBox = () => { box.style.display = "none"; };
+    // Something scrolled inside the page (a comment sheet, a carousel) takes priority.
+    const innerScrolled = (el) => {
+      for (let e = el; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+        if (e.scrollTop > 0) return true;
+        if (e.getAttribute && (e.getAttribute("role") === "dialog")) return true;
+      }
+      return false;
+    };
+    document.addEventListener("touchstart", (e) => {
+      pulling = false; dist = 0; startY = -1;
+      if (e.touches.length !== 1 || !isFeed() || window.scrollY > 0 || innerScrolled(e.target)) return;
+      startY = e.touches[0].clientY;
+      startX = e.touches[0].clientX;
+    }, { passive: true, capture: true });
+    document.addEventListener("touchmove", (e) => {
+      if (startY < 0) return;
+      const dy = e.touches[0].clientY - startY, dx = Math.abs(e.touches[0].clientX - startX);
+      if (!pulling) {
+        if (window.scrollY > 0 || dx > Math.abs(dy) || dy < -5) { startY = -1; return; }
+        if (dy < 15) return;
+        pulling = true;
+      }
+      dist = Math.max(0, dy - 15);
+      show(dist);
+    }, { passive: true, capture: true });
+    const end = () => {
+      if (pulling && dist >= PULL) {
+        box.style.transition = "none";
+        box.style.background = "#4f8cff";
+        box.animate([{ transform: box.style.transform }, { transform: box.style.transform + " rotate(720deg)" }],
+          { duration: 900, iterations: Infinity });
+        location.reload();
+      } else {
+        hideBox();
+      }
+      startY = -1; pulling = false; dist = 0;
+    };
+    document.addEventListener("touchend", end, { passive: true, capture: true });
+    document.addEventListener("touchcancel", () => { hideBox(); startY = -1; pulling = false; }, { passive: true, capture: true });
+  }
+
+  if (location.hostname === "m.facebook.com") setupPullToRefresh(() => /^\/(home\.php)?$/.test(location.pathname));
+
   port.onMessage.addListener((msg) => {
     try {
       if (msg.type === "find") find(msg.text);
