@@ -94,22 +94,9 @@ public class MainActivity extends Activity {
         session = null;
         show(mainSession);
         App.setPageListener(this::onPageMessage);
-        // The inbox (desktop site) takes a long time to start, so it loads quietly a few seconds
-        // after the feed, while the app is open; nothing is loaded in the background otherwise.
-        geckoView.postDelayed(this::preloadMessages, 4000);
-    }
-
-    private void preloadMessages() {
-        if (isFinishing() || owner != this || (messagesSession != null && messagesSession.isOpen())) return;
-        messagesSession = App.messages(this);
-        setDelegates(messagesSession);
-        // Hidden tabs are throttled hard, so let it load at full speed for a while, then let it
-        // sleep until it is opened.
-        final GeckoSession inbox = messagesSession;
-        inbox.setActive(true);
-        geckoView.postDelayed(() -> {
-            if (session != inbox && inbox.isOpen()) inbox.setActive(false);
-        }, 60000);
+        // The inbox (desktop site) is heavy while it starts (two CPU cores, ~1 GB for ~25 s), and
+        // a hidden tab doesn't stop that work, so it is loaded only when Messages is tapped
+        // (the chat list shows within ~3-4 s). This keeps the feed smooth after launch.
     }
 
     private void setDelegates(GeckoSession s) {
