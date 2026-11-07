@@ -6,11 +6,13 @@ import android.content.ActivityNotFoundException;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.provider.OpenableColumns;
 import android.util.Log;
 import android.view.View;
 import android.view.WindowInsets;
@@ -27,6 +29,8 @@ import org.mozilla.geckoview.GeckoSession.PromptDelegate;
 import org.mozilla.geckoview.GeckoView;
 import org.mozilla.geckoview.WebResponse;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
@@ -565,11 +569,47 @@ public class MainActivity extends Activity {
         }
         if (uris.isEmpty()) {
             r.complete(p.dismiss());
-        } else if (p.type == PromptDelegate.FilePrompt.Type.MULTIPLE) {
-            r.complete(p.confirm(this, uris.toArray(new Uri[0])));
-        } else {
-            r.complete(p.confirm(this, uris.get(0)));
+            return;
         }
+        // Gecko can't open content:// URIs from the picker on every site (the Messenger inbox
+        // fails with "Unrecognized path"), so the files are copied into the app's cache first
+        // and handed over as plain files.
+        new Thread(() -> {
+            File dir = new File(getCacheDir(), "uploads");
+            File[] old = dir.listFiles();
+            if (old != null) for (File f : old) f.delete();
+            dir.mkdirs();
+            List<Uri> files = new ArrayList<>();
+            for (int i = 0; i < uris.size(); i++) {
+                Uri u = uris.get(i);
+                File f = new File(dir, i + "_" + displayName(u));
+                try (InputStream in = getContentResolver().openInputStream(u);
+                     OutputStream out = new FileOutputStream(f)) {
+                    if (in == null) continue;
+                    byte[] buf = new byte[64 * 1024];
+                    for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+                    files.add(Uri.fromFile(f));
+                } catch (Exception e) {
+                    Log.w(App.TAG, "copy upload failed", e);
+                }
+            }
+            runOnUiThread(() -> {
+                if (files.isEmpty()) r.complete(p.dismiss());
+                else if (p.type == PromptDelegate.FilePrompt.Type.MULTIPLE)
+                    r.complete(p.confirm(this, files.toArray(new Uri[0])));
+                else r.complete(p.confirm(this, files.get(0)));
+            });
+        }).start();
+    }
+
+    private String displayName(Uri u) {
+        String name = null;
+        try (Cursor c = getContentResolver().query(u, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst()) name = c.getString(0);
+        } catch (Exception ignored) {
+        }
+        if (name == null || name.isEmpty()) name = "file";
+        return name.replaceAll("[\\/:*?\"<>|]", "_");
     }
 
     // ---- No notifications, location, camera or microphone; no autoplay with sound ----

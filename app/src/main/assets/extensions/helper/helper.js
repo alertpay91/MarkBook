@@ -79,10 +79,50 @@
   (document.head || document.documentElement).appendChild(hideStyle);
   const hide = (el, why) => {
     if (!el || el.dataset.mbHidden) return;
+    // The Reels viewer is a snapping pager: collapsing a page there shifts the pages after it
+    // and the pager jumps back a reel. Sponsored reels are skipped instead (see skipReels).
+    if (el.parentElement && el.parentElement.classList.contains("vscroller-snap")) {
+      if (!el.dataset.mbSkip) { el.dataset.mbSkip = why; skipReels(el.parentElement); }
+      return;
+    }
     el.dataset.mbHidden = why;
     el.dataset.mbHeight = el.style.height;
     el.style.height = "1px";
   };
+  // Reels viewer: when a swipe stops on a sponsored reel, go on to the next one (or the previous
+  // one when swiping back). Its picture is made invisible; its size stays untouched.
+  hideStyle.textContent += "[data-mb-skip]{opacity:0!important;pointer-events:none!important}";
+  const pagers = new WeakSet();
+  function skipReels(pager) {
+    if (pagers.has(pager)) return;
+    pagers.add(pager);
+    let lastTop = pager.scrollTop, dir = 1, timer = 0;
+    const settle = () => {
+      const top = pager.scrollTop;
+      if (top !== lastTop) dir = top > lastTop ? 1 : -1;
+      lastTop = top;
+      const r = pager.getBoundingClientRect();
+      const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      let unit = el;
+      while (unit && unit.parentElement !== pager) unit = unit.parentElement;
+      // elementFromPoint skips the invisible ad (pointer-events:none), so look by position too.
+      for (const k of pager.children) {
+        const kr = k.getBoundingClientRect();
+        if (kr.top <= r.top + r.height / 2 && kr.bottom > r.top + r.height / 2) { unit = k; break; }
+      }
+      if (!unit || !unit.dataset.mbSkip) return;
+      let next = dir > 0 ? unit.nextElementSibling : unit.previousElementSibling;
+      while (next && next.dataset.mbSkip) next = dir > 0 ? next.nextElementSibling : next.previousElementSibling;
+      if (!next) next = dir > 0 ? unit.previousElementSibling : unit.nextElementSibling;
+      log("skip sponsored reel, dir " + dir);
+      if (next) pager.scrollTo({ top: pager.scrollTop + next.getBoundingClientRect().top - r.top, behavior: "smooth" });
+    };
+    pager.addEventListener("scroll", () => {
+      clearTimeout(timer);
+      timer = setTimeout(settle, 180);
+    }, { passive: true });
+    setTimeout(settle, 300);
+  }
   // A feed unit is the child of the page's vertical scroller.
   const feedUnit = (el) => {
     for (let e = el; e && e.parentElement; e = e.parentElement) {
