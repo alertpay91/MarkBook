@@ -31,6 +31,10 @@ MarkBook je mala Android aplikacija za Facebook i poruke.
 - Ne troši bateriju kad je ne koristiš.
 - Ne traži lokaciju, kameru ni mikrofon.
 
+**Preuzimanje:** okruglo dugme ⬇ na desnoj strani čuva sliku ili video koji je na sredini
+ekrana u galeriju (*Pictures/MarkBook* i *Movies/MarkBook*). Video iz feed-a prvo pokreni.
+Facebook-ov mobilni sajt daje video u 360p.
+
 ### Instalacija preko Obtainium-a (preporučeno, ažurira se sam)
 
 1. Instaliraj **Obtainium**, kako je opisano u
@@ -73,6 +77,10 @@ otvara iz kompjuterske verzije Facebook-a, prilagođene ekranu telefona.
 - MarkBook has no notifications and no background services.
 - The page is paused as soon as you leave the app.
 - It asks for no location, camera or microphone access.
+
+**Download button:** the round ⬇ button on the right saves the photo or video in the middle of
+the screen to the gallery (*Pictures/MarkBook*, *Movies/MarkBook*). Start a feed video first.
+Facebook's mobile site serves video at 360p.
 
 ### Install
 

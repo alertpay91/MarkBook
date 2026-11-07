@@ -253,6 +253,72 @@
     document.addEventListener("touchcancel", () => { hideBox(); startY = -1; pulling = false; }, { passive: true, capture: true });
   }
 
+  // ---- Download button: saves the photo or video nearest the middle of the screen ----
+  if (location.hostname === "m.facebook.com") setupDownload();
+  function setupDownload() {
+    const visibleMedia = () => [...document.querySelectorAll("video, img")].map((e) => ({ e, r: e.getBoundingClientRect() }))
+      .filter((x) => x.r.width >= 150 && x.r.height >= 150 && x.r.bottom > 40 && x.r.top < innerHeight - 40
+        && !x.e.closest("[data-mb-hidden], [data-mb-skip]"));
+    const target = () => {
+      let best = null, dist = 1e9;
+      for (const x of visibleMedia()) {
+        const mid = innerHeight / 2;
+        const d = x.r.top <= mid && x.r.bottom >= mid ? 0 : Math.min(Math.abs(x.r.top - mid), Math.abs(x.r.bottom - mid));
+        // A playing video wins over its own poster picture.
+        if (d < dist || (d === dist && x.e.tagName === "VIDEO")) { dist = d; best = x.e; }
+      }
+      return best;
+    };
+    const btn = document.createElement("div");
+    btn.style.cssText = "position:fixed;right:8px;top:42%;z-index:2147483646;width:42px;height:42px;border-radius:21px;"
+      + "background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;"
+      + "box-shadow:0 1px 4px rgba(0,0,0,.4);-webkit-tap-highlight-color:transparent;";
+    btn.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" '
+      + 'stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>';
+    const flash = (ok) => {
+      btn.style.background = ok ? "rgba(46,160,67,.85)" : "rgba(200,50,50,.85)";
+      setTimeout(() => { btn.style.background = "rgba(0,0,0,.45)"; }, 900);
+    };
+    const download = () => {
+      const el = target();
+      if (!el) { flash(false); return; }
+      let url = "", video = el.tagName === "VIDEO";
+      if (video) {
+        url = el.currentSrc || el.src || (el.querySelector("source") || {}).src || "";
+      } else {
+        // A video that hasn't started yet shows only its poster picture.
+        const box = el.closest("[data-type=video], [data-mcomponent=MVideo]");
+        const v = box && box.querySelector("video");
+        if (v && (v.currentSrc || v.src)) { video = true; url = v.currentSrc || v.src; }
+        else if (box || /video/i.test(el.alt || "")) {
+          port.postMessage({ type: "toast", text: "Pokreni video pa pritisni ⬇" });
+          flash(false);
+          return;
+        } else url = el.currentSrc || el.src;
+      }
+      if (!url || url.startsWith("blob:") || url.startsWith("data:")) {
+        port.postMessage({ type: "toast", text: "Ovaj snimak ne može da se preuzme" });
+        flash(false);
+        return;
+      }
+      port.postMessage({ type: "download", files: [{ url, video, name: "markbook_" + Date.now() }] });
+      flash(true);
+    };
+    for (const t of ["touchstart", "touchend", "pointerdown", "pointerup", "mousedown", "mouseup", "click"]) {
+      btn.addEventListener(t, (e) => {
+        e.stopPropagation();
+        if (t === "click") { e.preventDefault(); download(); }
+      }, { passive: false });
+    }
+    const update = () => {
+      const show = !!target();
+      if (show && !btn.isConnected) document.documentElement.appendChild(btn);
+      btn.style.display = show ? "flex" : "none";
+    };
+    setInterval(() => { if (document.visibilityState === "visible") update(); }, 700);
+    update();
+  }
+
   if (location.hostname === "m.facebook.com") setupPullToRefresh(() => /^\/(home\.php)?$/.test(location.pathname));
 
   port.onMessage.addListener((msg) => {

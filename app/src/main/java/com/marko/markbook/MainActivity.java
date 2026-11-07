@@ -143,8 +143,81 @@ public class MainActivity extends Activity {
             int id = backRequest;
             backRequest++; // answered: cancel the timeout
             if (!msg.optBoolean("handled") && id == backRequest - 1) show(mainSession);
+        } else if ("download".equals(type)) {
+            saveMedia(msg.optJSONArray("files"));
+        } else if ("toast".equals(type)) {
+            Toast.makeText(this, msg.optString("text"), Toast.LENGTH_SHORT).show();
         }
     }
+
+    // ---- Download button: photos go to Pictures/MarkBook, videos to Movies/MarkBook ----
+
+    private void saveMedia(org.json.JSONArray files) {
+        if (files == null || files.length() == 0) return;
+        if (Build.VERSION.SDK_INT < 29) {
+            Toast.makeText(this, "Preuzimanje traži Android 10 ili noviji", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final android.content.Context ctx = getApplicationContext();
+        Toast.makeText(this, files.length() > 1 ? "Preuzimam " + files.length() + " fajla…" : "Preuzimam…",
+                Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            int ok = 0;
+            boolean anyVideo = false;
+            for (int i = 0; i < files.length(); i++) {
+                org.json.JSONObject f = files.optJSONObject(i);
+                if (f == null) continue;
+                boolean video = f.optBoolean("video");
+                anyVideo |= video;
+                String name = f.optString("name", "markbook") + (video ? ".mp4" : ".jpg");
+                Uri out = null;
+                try {
+                    java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(f.getString("url")).openConnection();
+                    c.setConnectTimeout(15000);
+                    c.setReadTimeout(30000);
+                    if (c.getResponseCode() != 200) throw new java.io.IOException("HTTP " + c.getResponseCode());
+                    String type = c.getContentType();
+                    if (type == null || !type.contains("/")) type = video ? "video/mp4" : "image/jpeg";
+                    type = type.split(";")[0].trim();
+                    if (!video) {
+                        String ext = type.equals("image/webp") ? ".webp" : type.equals("image/png") ? ".png"
+                                : type.equals("image/avif") ? ".avif" : type.equals("image/gif") ? ".gif" : ".jpg";
+                        name = name.replaceAll("\\.jpg$", ext);
+                    }
+                    ContentValues v = new ContentValues();
+                    v.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                    v.put(MediaStore.MediaColumns.MIME_TYPE, type);
+                    v.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                            (video ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_PICTURES) + "/MarkBook");
+                    v.put(MediaStore.MediaColumns.IS_PENDING, 1);
+                    Uri collection = video
+                            ? MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                            : MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+                    out = ctx.getContentResolver().insert(collection, v);
+                    if (out == null) throw new java.io.IOException("insert failed");
+                    try (InputStream in = c.getInputStream(); OutputStream os = ctx.getContentResolver().openOutputStream(out)) {
+                        byte[] buf = new byte[64 * 1024];
+                        for (int n; (n = in.read(buf)) > 0; ) os.write(buf, 0, n);
+                    }
+                    ContentValues done = new ContentValues();
+                    done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                    ctx.getContentResolver().update(out, done, null, null);
+                    ok++;
+                } catch (Exception e) {
+                    Log.w(App.TAG, "media download failed", e);
+                    if (out != null) {
+                        try { ctx.getContentResolver().delete(out, null, null); } catch (Exception ignored) { }
+                    }
+                }
+            }
+            final int saved = ok, total = files.length();
+            final String where = anyVideo ? "galeriju (Movies/MarkBook)" : "galeriju (Pictures/MarkBook)";
+            runOnUiThread(() -> Toast.makeText(ctx,
+                    saved == total ? "Sačuvano u " + where : saved > 0 ? "Sačuvano " + saved + " od " + total : "Preuzimanje nije uspelo",
+                    Toast.LENGTH_SHORT).show());
+        }, "media-download").start();
+    }
+
 
     private static boolean isMessagesUrl(Uri u) {
         String path = u.getPath() == null ? "" : u.getPath();
