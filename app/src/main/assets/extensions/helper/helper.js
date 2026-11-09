@@ -77,8 +77,13 @@
     + "overflow:visible!important;opacity:0!important;pointer-events:none!important;"
     + "position:relative!important;z-index:-1!important}";
   (document.head || document.documentElement).appendChild(hideStyle);
+  // A single post, photo or video with its comments: the comment list is one big block, and a
+  // commenter's "Follow" button looked like a suggested post's header, so all comments
+  // vanished. Nothing but app prompts is hidden on these pages.
+  const POST_PAGE = /^\/(story\.php|permalink\.php|photo\.php|photo\/|video\.php|comment\/|[^/]+\/(posts|photos|videos|permalink)\/|groups\/[^/]+\/(posts|permalink)\/)/;
   const hide = (el, why) => {
     if (!el || el.dataset.mbHidden) return;
+    if (why !== "promo" && POST_PAGE.test(location.pathname)) return;
     // The Reels viewer is a snapping pager: collapsing a page there shifts the pages after it
     // and the pager jumps back a reel. Sponsored reels are skipped instead (see skipReels).
     if (el.parentElement && el.parentElement.classList.contains("vscroller-snap")) {
@@ -175,6 +180,23 @@
   // ---- Inbox (desktop site): close the "turn on push notifications" prompt; MarkBook never
   //      shows notifications anyway ----
   if (location.hostname === "www.facebook.com") {
+    // Facebook's desktop page allows zooming, and while a part of it is wider than the phone
+    // (a photo viewer, a half-built page) Gecko zooms the whole inbox out until it can't be
+    // used. Pin the page to the phone's width at 100 %.
+    const VP = "width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no";
+    const pinViewport = () => {
+      const head = document.head || document.documentElement;
+      if (!head) return;
+      let m = document.querySelector("meta[name=viewport]");
+      if (!m) {
+        m = document.createElement("meta");
+        m.name = "viewport";
+        head.appendChild(m);
+      }
+      if (m.content !== VP) m.content = VP;
+    };
+    pinViewport();
+    new MutationObserver(pinViewport).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["content"] });
     const CLOSE = /^(затвори|zatvori|close|not now|ne sada|не сада)$/i;
     const closePrompts = () => {
       for (const d of document.querySelectorAll("[role=alertdialog][aria-label*=notification i], [role=dialog][aria-label*=notification i]")) {
@@ -346,15 +368,40 @@
       }
       else if (msg.type === "chatBack") {
         // Browser history inside the inbox ends on an empty "No chats selected" page; the
-        // chat's own back arrow returns to the list.
+        // chat's own back arrow returns to the list. If Facebook doesn't react (the page got
+        // stuck), say "not handled" so the app goes back to the feed instead of trapping you.
         const BACK = /^(назад|nazad|back)$/i;
+        const before = location.pathname;
+        const reply = (handled) => port.postMessage({ type: "backResult", handled });
+        // An open photo viewer, emoji picker or menu: close that first.
+        const dlg = [...document.querySelectorAll("[role=dialog]")].filter((d) => {
+          const r = d.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        }).pop();
+        if (dlg) {
+          const close = [...dlg.querySelectorAll("[role=button][aria-label], [aria-label][tabindex]")].find((e) =>
+            /^(затвори|zatvori|close)$/i.test((e.getAttribute("aria-label") || "").trim()));
+          if (close) { close.click(); reply(true); return; }
+          document.activeElement && document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true }));
+          setTimeout(() => reply(!dlg.isConnected || dlg.getBoundingClientRect().width === 0), 300);
+          return;
+        }
         const b = [...document.querySelectorAll("[role=button][aria-label], [aria-label][tabindex]")].find((e) => {
           const r = e.getBoundingClientRect();
           return BACK.test(e.getAttribute("aria-label").trim()) && r.width > 0 && r.top >= 0 && r.top < 250;
         });
         const inChat = /\/messages\/(e2ee\/)?t\//.test(location.pathname);
-        if (inChat && b) b.click();
-        port.postMessage({ type: "backResult", handled: !!(inChat && b) });
+        if (!inChat) { reply(false); return; }
+        // No arrow: the chat list is showing (its address can still be the chat's). Leave.
+        if (!b) { reply(false); return; }
+        b.click();
+        // The arrow shows the chat list without always changing the address: it worked when
+        // the arrow itself is gone. If it is still there the page is stuck: let the app leave.
+        const gone = () => !b.isConnected || b.getBoundingClientRect().width === 0 || location.pathname !== before;
+        setTimeout(() => {
+          if (gone()) reply(true);
+          else setTimeout(() => reply(gone()), 600);
+        }, 400);
       }
       else if (msg.type === "reload") location.href = msg.url || location.href;
       else if (msg.type === "buttons") {

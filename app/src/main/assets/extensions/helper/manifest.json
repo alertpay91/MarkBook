@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "MarkBook helper",
-  "version": "1.19",
+  "version": "1.21",
   "browser_specific_settings": { "gecko": { "id": "helper@markbook.marko" } },
   "permissions": ["nativeMessaging", "nativeMessagingFromContent", "geckoViewAddons"],
   "content_scripts": [{

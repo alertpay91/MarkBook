@@ -134,6 +134,7 @@ public class MainActivity extends Activity {
     }
 
     private int backRequest;
+    private long lastInboxBack;
 
     private void onPageMessage(org.json.JSONObject msg) {
         String type = msg.optString("type");
@@ -260,11 +261,20 @@ public class MainActivity extends Activity {
         } else if (session == messagesSession) {
             // Inbox: chat -> chat list -> back to the feed (history would end on an empty page).
             // The page knows best whether a chat is open (Facebook doesn't report that change).
+            // Two quick presses always return to the feed, even if the inbox page is stuck.
+            long now = android.os.SystemClock.uptimeMillis();
+            boolean twice = now - lastInboxBack < 1200;
+            lastInboxBack = now;
+            if (twice) {
+                backRequest++;
+                show(mainSession);
+                return;
+            }
             final int id = ++backRequest;
             App.send(session, "{\"type\":\"chatBack\"}");
             geckoView.postDelayed(() -> {
                 if (backRequest == id) { backRequest++; show(mainSession); }
-            }, 400);
+            }, 1800);
         } else if (Boolean.TRUE.equals(canGoBack.get(session))) {
             session.goBack();
         } else if (!isHome(urls.get(session))) {
