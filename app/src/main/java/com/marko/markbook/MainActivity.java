@@ -220,6 +220,37 @@ public class MainActivity extends Activity {
     }
 
 
+    /**
+     * The inbox tab runs the desktop site. Anything there that isn't a chat (or a login step)
+     * would show Facebook's desktop page on the phone, so it goes to the normal tab instead.
+     */
+    private static boolean leavesInbox(Uri u) {
+        String scheme = u.getScheme();
+        if (!"https".equals(scheme) && !"http".equals(scheme)) return false;
+        String host = u.getHost() == null ? "" : u.getHost().toLowerCase();
+        if (!host.equals("www.facebook.com") && !host.equals("facebook.com")) return false;
+        String path = u.getPath() == null ? "/" : u.getPath();
+        return !(isMessagesUrl(u) || path.startsWith("/login") || path.startsWith("/checkpoint")
+                || path.startsWith("/two_step_verification") || path.startsWith("/auth")
+                || path.startsWith("/dialog") || path.startsWith("/ajax") || path.startsWith("/api")
+                || path.startsWith("/recover") || path.startsWith("/privacy") || path.startsWith("/cookie")
+                || path.startsWith("/challenge") || path.startsWith("/confirmemail"));
+    }
+
+    private void leaveInbox(String url, boolean alreadyThere) {
+        // Only what you tapped while looking at the inbox is opened; stepping the inbox tab
+        // back (below) can pass more non-chat pages, which are just skipped.
+        boolean open = session == messagesSession;
+        if (alreadyThere) {
+            // Put the inbox tab back on the chats (the cheap way: one step back).
+            if (Boolean.TRUE.equals(canGoBack.get(messagesSession))) messagesSession.goBack();
+            else messagesSession.loadUri(App.MESSAGES);
+        }
+        if (!open) return;
+        show(mainSession);
+        if (!isHome(url)) mainSession.loadUri(App.toMobile(url));
+    }
+
     private static boolean isMessagesUrl(Uri u) {
         String path = u.getPath() == null ? "" : u.getPath();
         return path.startsWith("/messages") || path.startsWith("/t/") || path.startsWith("/messenger");
@@ -372,6 +403,11 @@ public class MainActivity extends Activity {
         public void onLocationChange(GeckoSession s, String url, List<ContentPermission> perms,
                                      Boolean hasUserGesture) {
             if (url != null) urls.put(s, url);
+            // Facebook's desktop page changes pages without loading them (logo, notifications,
+            // a profile, the chat pop-up...), so check every address the inbox tab moves to.
+            if (s == messagesSession && url != null && leavesInbox(Uri.parse(url))) {
+                leaveInbox(url, true);
+            }
         }
 
         @Override
@@ -382,6 +418,10 @@ public class MainActivity extends Activity {
                 case "http":
                 case "https":
                     if (isAllowed(uri)) {
+                        if (s == messagesSession && leavesInbox(uri)) {
+                            leaveInbox(req.uri, false);
+                            return GeckoResult.deny();
+                        }
                         if (s == mainSession && isMessagesUrl(uri)) {
                             // Only a real link to a chat opens it; the inbox itself is kept as is.
                             boolean chat = uri.getPath() != null && uri.getPath().contains("/t/");

@@ -56,6 +56,30 @@
         }
       }, { capture: true, passive: false });
     }
+    // Other ways in ("Send message" on a profile, a story reply...) show the same "Get the
+    // Messenger app" screen: close it and open the inbox instead.
+    const WALL = /^(get the messenger app|get messenger|preuzmite messenger|preuzmi messenger|набавите messenger|преузмите messenger|набавите апликацију messenger|preuzmite aplikaciju messenger)$/i;
+    let lastWall = 0;
+    const checkWall = () => {
+      if (Date.now() - lastWall < 3000) return;
+      const h = [...document.querySelectorAll("h1, h2, h3, [role=heading], span, div")].find((el) =>
+        el.childElementCount === 0 && WALL.test((el.textContent || "").trim()) && el.getBoundingClientRect().height > 0);
+      if (!h) return;
+      lastWall = Date.now();
+      const close = [...document.querySelectorAll("[aria-label]")].find((el) =>
+        /^(close|zatvori|затвори|back|nazad|назад)$/i.test(el.getAttribute("aria-label").trim()) && el.getBoundingClientRect().width > 0);
+      log("messenger wall -> inbox" + (close ? "" : " (no close button)"));
+      if (close) close.click(); else history.back();
+      port.postMessage({ type: "openMessages" });
+    };
+    let wallQueued = false;
+    new MutationObserver((list) => {
+      if (wallQueued) return;
+      // Only look when something mentioning Messenger was added (keeps the feed cheap).
+      if (!list.some((m) => [...m.addedNodes].some((n) => (n.textContent || "").indexOf("Messenger") >= 0))) return;
+      wallQueued = true;
+      setTimeout(() => { wallQueued = false; try { checkWall(); } catch (e) { } }, 300);
+    }).observe(document.documentElement, { childList: true, subtree: true });
   }
 
   // ---- Cleanup on the mobile site: sponsored posts and "use the app" prompts ----

@@ -95,6 +95,12 @@ public class App extends Application {
         return u.buildUpon().scheme("https").authority("www.facebook.com").build().toString();
     }
 
+    /** www.facebook.com/... -> m.facebook.com/... */
+    static String toMobile(String url) {
+        android.net.Uri u = android.net.Uri.parse(url);
+        return u.buildUpon().scheme("https").authority("m.facebook.com").build().toString();
+    }
+
     static void setPageListener(java.util.function.Consumer<JSONObject> l) {
         pageListener = l;
     }
