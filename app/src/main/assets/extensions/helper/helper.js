@@ -368,8 +368,10 @@
   // No autoplay: a video that starts without a tap in the last seconds is paused again.
   // Feed videos playing by themselves (muted) cost 108-151% of a core on a Pixel 8, the
   // rest of the feed 3-8%. A tap on a video plays it as usual.
+  // Reels (/reel/…, /reels/…) keep playing by themselves while swiping, as the user asked.
   const noAutoplay = (v) => {
     if (!v || !v.pause || (navigator.userActivation && navigator.userActivation.isActive)) return;
+    if (/^\/reels?\//.test(location.pathname)) return;
     v.pause();
   };
   document.addEventListener("play", (e) => noAutoplay(e.target), true);
