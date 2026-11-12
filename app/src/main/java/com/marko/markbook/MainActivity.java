@@ -722,13 +722,14 @@ public class MainActivity extends Activity {
         return name.replaceAll("[\\/:*?\"<>|]", "_");
     }
 
-    // ---- No notifications, location, camera or microphone; no autoplay with sound ----
+    // ---- No notifications, location, camera or microphone; no autoplay at all ----
+    // Feed videos playing by themselves (muted) cost 108-151% of a core on a Pixel 8, the
+    // rest of the feed 3-8%. They start on a tap instead (a tap counts as permission).
 
     private static class Permissions implements GeckoSession.PermissionDelegate {
         @Override
         public GeckoResult<Integer> onContentPermissionRequest(GeckoSession s, ContentPermission perm) {
-            boolean allow = perm.permission == PERMISSION_AUTOPLAY_INAUDIBLE
-                    || perm.permission == PERMISSION_PERSISTENT_STORAGE;
+            boolean allow = perm.permission == PERMISSION_PERSISTENT_STORAGE;
             return GeckoResult.fromValue(allow ? ContentPermission.VALUE_ALLOW : ContentPermission.VALUE_DENY);
         }
 

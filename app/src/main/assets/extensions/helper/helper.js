@@ -365,6 +365,32 @@
     update();
   }
 
+  // No autoplay: a video that starts without a tap in the last seconds is paused again.
+  // Feed videos playing by themselves (muted) cost 108-151% of a core on a Pixel 8, the
+  // rest of the feed 3-8%. A tap on a video plays it as usual.
+  const noAutoplay = (v) => {
+    if (!v || !v.pause || (navigator.userActivation && navigator.userActivation.isActive)) return;
+    v.pause();
+  };
+  document.addEventListener("play", (e) => noAutoplay(e.target), true);
+  document.addEventListener("playing", (e) => noAutoplay(e.target), true);
+  for (const v of document.querySelectorAll("video")) if (!v.paused) noAutoplay(v);
+  // Animations far off screen keep running (e.g. Facebook's "loading more" spinner thousands
+  // of pixels below, ~40% of a core on the video tab). Freeze each one while it is off screen.
+  const offStyle = document.createElement("style");
+  offStyle.textContent = ".mb-offscreen, .mb-offscreen * { animation-play-state: paused !important; }";
+  (document.head || document.documentElement).appendChild(offStyle);
+  const offIO = new IntersectionObserver((entries) => {
+    for (const e of entries) e.target.classList.toggle("mb-offscreen", !e.isIntersecting);
+  }, { rootMargin: "200px" });
+  const offSeen = new WeakSet();
+  setInterval(() => {
+    if (document.visibilityState !== "visible") return;
+    for (const a of document.getAnimations()) {
+      const t = a.effect && a.effect.target;
+      if (t && t.nodeType === 1 && !offSeen.has(t)) { offSeen.add(t); offIO.observe(t); }
+    }
+  }, 2000);
   if (location.hostname === "m.facebook.com") setupPullToRefresh(() => /^\/(home\.php)?$/.test(location.pathname));
 
   port.onMessage.addListener((msg) => {
